@@ -73,6 +73,20 @@ def export_entries(
     )
 
 
+@router.get("/{module}/intake/{source}/{round_key}", response_model=dict)
+def intake_receipt(module: str, source: str, round_key: str) -> dict[str, Any]:
+    """报告登记回执回查：清洗页与规则页共用同一套回查口径。
+
+    返回已确认（confirmed）、待受理（pending）、生成失败（failed）、
+    真实无检查（none）四种结果，失败时附带当前批次的实际来源和状态。
+    """
+    service = require_service(module)
+    receipt = getattr(service, "intake_receipt", None)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail=f"{module} 不支持报告回执回查")
+    return receipt(source, round_key)
+
+
 @router.get("/{module}/{entry_id}", response_model=dict)
 def get_entry(module: str, entry_id: int) -> dict[str, Any]:
     service = require_service(module)

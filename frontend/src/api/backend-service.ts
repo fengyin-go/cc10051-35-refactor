@@ -59,3 +59,27 @@ export async function loadOverview(): Promise<OverviewResult> {
   if (!response.ok) throw new Error('运营概览读取失败')
   return await response.json()
 }
+
+/** 报告登记回执：已确认 / 待受理 / 生成失败 / 真实无检查 四种结果。 */
+export type IntakeReceipt = {
+  ok: boolean
+  state: 'confirmed' | 'pending' | 'failed' | 'none'
+  report_id?: number
+  报告批次?: string
+  来源?: string
+  status?: string
+  回执状态?: string
+  检查总数?: string
+  命中数?: string
+  message?: string
+}
+
+/** 清洗页与规则页共用的报告回执回查：按来源与执行轮查询登记状态。 */
+export async function fetchIntakeReceipt(
+  source: string,
+  roundKey: string,
+): Promise<IntakeReceipt> {
+  const response = await request(`/api/quality_result/intake/${source}/${roundKey}`)
+  if (!response.ok) throw new Error('报告回执回查失败')
+  return await response.json()
+}

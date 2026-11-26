@@ -9,7 +9,17 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.quality_result import QualityResultService
 from app.store import store
+
+
+def _report_service() -> QualityResultService:
+    """取注册表里的质量报告服务：登记写入已收拢到报告端单点。"""
+    from app.services import service_for
+
+    service = service_for("quality_result")
+    assert isinstance(service, QualityResultService)
+    return service
 
 
 class StdCleanseService(BaseModuleService):
@@ -96,24 +106,25 @@ class StdCleanseService(BaseModuleService):
                 if j.get("实体编码") == entity_code and j.get("status") == "已完成"]
 
     def produce_quality_input(self, entry_id: int, cleaned_count: int) -> int:
-        """把清洗结果作为质量检查输入，写入 quality_result。"""
+        """把清洗结果作为质量检查输入，经统一入口登记到 quality_result。
+
+        清洗产物登记为待检查（生成中、命中数 0）；入口输入输出不变。
+        同一清洗规则同一轮重复回传时返回已登记的那份报告编号，
+        由本模块（原受理方）补办登记，报告端不接管本批处理资格。
+        """
         entry = store.find(self.MODULE, entry_id)
         if entry is None:
             return 0
-        results = store.rows("quality_result")
-        report_id = max((int(r.get("id", 0)) for r in results), default=0) + 1
-        results.append({
-            "id": report_id,
-            "报告批次": f"qr-{entry.get('实体编码')}-{report_id}",
-            "实体编码": entry.get("实体编码", ""),
-            "检查总数": str(cleaned_count),
-            "命中数": "0",
-            "评分结果": "pending",
-            "status": "生成中",
-            "pending": True,
-            "abnormal": False,
-        })
-        return report_id
+        receipt = _report_service().register_report_input(
+            source="std_cleanse",
+            round_key=f"cleanse-{entry_id}",
+            entity_code=str(entry.get("实体编码", "")),
+            total=cleaned_count,
+            hits=0,
+            confirmed=False,
+            batch_label=str(entry.get("实体编码", "")),
+        )
+        return int(receipt["report_id"]) if receipt.get("ok") else 0
 
     def batch_enable(self, entity_code: str) -> int:
         """批量启用某实体下的全部草稿清洗规则。"""

@@ -28,6 +28,13 @@
       </span>
     </p>
 
+    <p v-if="meta.key === 'quality_result'" class="status-legend" data-testid="receipt-summary">
+      <span class="legend-item">待受理：{{ receiptSummary.待受理 }}</span>
+      <span class="legend-item">已确认：{{ receiptSummary.已确认 }}</span>
+      <span class="legend-item">零检查：{{ receiptSummary.零检查 }}</span>
+      <span class="legend-item">生成失败：{{ receiptSummary.生成失败 }}</span>
+    </p>
+
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
         <span>{{ field }}</span>
@@ -48,7 +55,14 @@
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)" :data-testid="`row-${row.id}`" :data-status="String(row.status)">
           <td v-for="column in meta.fields" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
+          <td>
+            {{ row.status }}
+            <template v-if="meta.key === 'quality_result'">
+              <span class="tag source-tag" :data-testid="`source-${row.id}`">{{ row.来源 ?? '历史数据' }}</span>
+              <span class="tag receipt-tag" :data-testid="`receipt-${row.id}`">{{ receiptStateOf(row) }}</span>
+            </template>
+            <span v-else-if="row.回执状态" class="tag receipt-tag">{{ row.回执状态 }}</span>
+          </td>
           <td class="row-actions">
             <button
               v-for="action in meta.actions"
@@ -60,6 +74,22 @@
             >
               {{ action }}
             </button>
+            <button
+              v-if="intakeSource"
+              class="link"
+              type="button"
+              :data-testid="`intake-${row.id}`"
+              @click="checkIntake(row)"
+            >
+              报告回执
+            </button>
+            <span
+              v-if="intakeReceipts[String(row.id)]"
+              class="tag receipt-tag"
+              :data-testid="`intake-result-${row.id}`"
+            >
+              {{ intakeLabel(intakeReceipts[String(row.id)]) }}
+            </span>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -99,10 +129,12 @@ import { computed, onMounted, ref } from 'vue'
 import {
   createEntry,
   downloadEntries,
+  fetchIntakeReceipt,
   listEntries,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
+import type { IntakeReceipt } from '@/api/backend-service'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -115,6 +147,52 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+
+// 报告回执回查：清洗页与规则页共用同一套回查方式，按来源与执行轮查询。
+const INTAKE_SOURCES: Record<string, { source: string; prefix: string }> = {
+  std_cleanse: { source: 'std_cleanse', prefix: 'cleanse' },
+  quality_rule: { source: 'quality_rule', prefix: 'rule' },
+}
+const intakeSource = INTAKE_SOURCES[props.moduleKey]
+const intakeReceipts = ref<Record<string, IntakeReceipt>>({})
+
+type ReceiptState = '待受理' | '已确认' | '零检查' | '生成失败'
+
+function receiptStateOf(row: EntryRow): ReceiptState {
+  if (row.status === '已生成') return Number(row.检查总数) === 0 ? '零检查' : '已确认'
+  if (row.status === '生成失败') return '生成失败'
+  return '待受理'
+}
+
+const receiptSummary = computed<Record<ReceiptState, number>>(() => {
+  const summary: Record<ReceiptState, number> = { 待受理: 0, 已确认: 0, 零检查: 0, 生成失败: 0 }
+  for (const row of rows.value) summary[receiptStateOf(row)] += 1
+  return summary
+})
+
+async function checkIntake(row: EntryRow) {
+  if (!intakeSource) return
+  errorMessage.value = ''
+  try {
+    const receipt = await fetchIntakeReceipt(intakeSource.source, `${intakeSource.prefix}-${row.id}`)
+    intakeReceipts.value = { ...intakeReceipts.value, [String(row.id)]: receipt }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '报告回执回查失败'
+  }
+}
+
+function intakeLabel(receipt: IntakeReceipt): string {
+  switch (receipt.state) {
+    case 'confirmed':
+      return `已确认回执：${receipt.报告批次 ?? ''}（检查 ${receipt.检查总数 ?? '—'} / 命中 ${receipt.命中数 ?? '—'}）`
+    case 'pending':
+      return '待受理：登记已收到，报告尚不可用'
+    case 'failed':
+      return `生成失败：${receipt.来源 ?? ''} ${receipt.status ?? ''}`
+    default:
+      return '真实无检查：该轮尚无登记'
+  }
+}
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
